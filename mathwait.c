@@ -3,30 +3,34 @@
 #
 # Paul Moses
 # CMP_SCI-2750-002
-# Project 4: Fork/Wait
+# Project 5: Fork/Wait-Shared memory
 #
 */
 
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <sys/wait.h>
 #include <string.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 void showOptions() {
   printf("\nThis executable mathwait takes the following optional command line options:\n");
   printf("\t-h : Output a help message indicating what types of inputs it expects.\n\n");
-  printf("Usage example: ./mathwait INPUTFILE 32 9 10 -13\n");
+  printf("Usage example: ./mathwait OUTFILE 32 9 10 -13\n");
 }
 
 int main(int argc, char *argv[]) {
+  int num = 2;
+
   FILE *filePointer = NULL;
+
+  key_t key = ftok("mathwait.c", 'b');
 
   // 19 is the spec
   int sum = 19;
-
-  int pairFlag = 0;
 
   // it will start with 2 when run with only a filename and no numbers
   int numQuant = argc - 2;
@@ -47,13 +51,26 @@ int main(int argc, char *argv[]) {
     exit(0);
   }
 
+  //test
+  int shmid = shmget(key, num, 0644|IPC_CREAT);
+  int *arr = shmat(shmid, NULL, 0);
+  arr[0] = -2;
+  arr[1] = -2;
+
   // overwrite file if exists
   filePointer = fopen(argv[1], "w");
 
   if (filePointer == NULL) {
-      printf("No file specified.\n");
-      showOptions();
-      exit(1);
+    printf("No file specified.\n");
+    showOptions();
+
+    // shmctl with IPC_RMID marks shared segment for destruction after detachment
+    shmctl(shmid, IPC_RMID, NULL);
+
+    // detach
+    shmdt(&shmid);
+
+    exit(1);
   }
 
   // fork the child process
@@ -61,6 +78,13 @@ int main(int argc, char *argv[]) {
 
   if (pid < 0) {
     fprintf(stderr, "Error forking");
+
+    // shmctl with IPC_RMID marks shared segment for destruction after detachment
+    shmctl(shmid, IPC_RMID, NULL);
+
+    // detach
+    shmdt(&shmid);
+
     exit(1);
   }
   // child process
@@ -79,20 +103,16 @@ int main(int argc, char *argv[]) {
 
     if (filePointer == NULL) {
       fprintf(stderr, "Error on input. Try again.\n");
+
+      // shmctl with IPC_RMID marks shared segment for destruction after detachment
+      shmctl(shmid, IPC_RMID, NULL);
+
+      // detach
+      shmdt(&shmid);
+
       exit(1);
     }
     else {
-      // Child: 171891: 32 9 10 -13
-      fprintf(filePointer, "Child: %d:", getpid());
-
-      for (int i = 0; i < numQuant; i++) {
-        fprintf(filePointer, " %d", numArray[i]);
-      }
-      fprintf(filePointer, "\n");
-
-      // display the pairs
-      fprintf(filePointer, "Child: %d:", getpid());
-
       // i is the first position and j is the one after
       // check all the j's for each i if they add up to 'sum'
       for (int i = 0; i < numQuant; i++) {
@@ -100,51 +120,76 @@ int main(int argc, char *argv[]) {
           int z = numArray[i] + numArray[j];
 
           if (z == sum) {
-            fprintf(filePointer, " Pair: %d %d", numArray[i], numArray[j]);
-            pairFlag = 1;
+            arr[0] = numArray[i];
+  			arr[1] = numArray[j];
+            free(freeCopy);
+
+            // detaches as well
+            exit(0);
           }
         }
       }
-      fprintf(filePointer, "\n");
     }
 
     // free the heap
     free(freeCopy);
 
-    // check if any pairs were found
-    if (pairFlag == 1) {
-      exit(0);
-    }
-    else {
-      exit(1);
-    }
+    // none found
+    arr[0] = -1;
+  	arr[1] = -1;
+
+    exit(1);
   }
   // parent
   else if (pid > 0) {
-    int status;
-    char* charStatus = NULL;
+    int status = 0;
 
     // Waits for child to end
     waitpid(pid, &status, 0);
 
-    // convert int to expected string
-    if (WEXITSTATUS(status) == 0) {
-      charStatus = "EXIT_SUCCESS";
-    }
-    else if (WEXITSTATUS(status) == 1) {
-      charStatus = "EXIT_FAILURE";
-    }
-
     if (filePointer == NULL) {
       fprintf(stderr, "Error on input. Try again.\n");
+
+      // shmctl with IPC_RMID marks shared segment for destruction after detachment
+      shmctl(shmid, IPC_RMID, NULL);
+
+      // detach
+      shmdt(&shmid);
+
       exit(1);
     }
     else {
-      // Parent: 172699: EXIT_SUCCESS
-      fprintf(filePointer, "Parent: %d: %s\n", getpid(), charStatus);
+      if (arr[0] == -1 && arr[1] == -1) {
+        fprintf(filePointer, "No pair was found.\n");
+      }
+      else if (arr[0] == -2 && arr[1] == -2) {
+        fprintf(filePointer, "Child did not do anything to it and so some error occurred.\n");
+
+        // close the file
+        fclose(filePointer);
+
+        // shmctl with IPC_RMID marks shared segment for destruction after detachment
+        shmctl(shmid, IPC_RMID, NULL);
+
+        // detach
+        shmdt(&shmid);
+
+        exit(1);
+      }
+      else {
+        fprintf(filePointer, "Pair found by child: %d %d\n", arr[0], arr[1]);
+      }
 
       // close the file
       fclose(filePointer);
+
+      // shmctl with IPC_RMID marks shared segment for destruction after detachment
+      shmctl(shmid, IPC_RMID, NULL);
+
+      // detach
+      shmdt(&shmid);
+
+      exit(0);
     }
   }
 }
