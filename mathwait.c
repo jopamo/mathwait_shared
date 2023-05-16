@@ -1,8 +1,6 @@
 /*
 #
 #
-# Paul Moses
-# CMP_SCI-2750-002
 # Project 5: Fork/Wait-Shared memory
 #
 */
